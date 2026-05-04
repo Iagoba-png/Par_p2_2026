@@ -12,7 +12,7 @@
    T -> 3
    N -> 4*/
 
-#define M  1000000 // Number of sequences
+#define M  10000 // Number of sequences
 #define N  200     // Number of bases per sequence
 
 unsigned int g_seed = 0;
@@ -57,45 +57,39 @@ int main(int argc, char *argv[] ) {
   int i, j;
   int *data1, *data2;
   int *result;
-  int *local_data1, *local_data2;
-  int *local_result;
-  
+  int *loc_data1, *loc_data2;
+  int *loc_result;
+
   int rank, size;
-  int rows;  // Number of rows per process
-  int remainder;
-  int local_rows;
-  
+  int filas_gen;  // Number of filas_gen per process
+  int resto;
+  int filas_conc;
+
   double comm_start, comm_end, comp_start, comp_end;
   double comm_time = 0.0, comp_time = 0.0;
-  
+
   MPI_Init(&argc, &argv);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+  filas_gen = M / size;
+  resto = M % size;
   
-  // Calculate rows per process
-  rows = M / size;
-  remainder = M % size;
-  
-  // Determine local number of rows for this process
-  // Processes with rank < remainder get one extra row
-  if (rank < remainder) {
-    local_rows = rows + 1;
+  if (rank < resto) {
+    filas_conc = filas_gen + 1;
   } else {
-    local_rows = rows;
+    filas_conc = filas_gen;
   }
-  
-  // Allocate memory for local data
-  local_data1 = (int *) malloc(local_rows * N * sizeof(int));
-  local_data2 = (int *) malloc(local_rows * N * sizeof(int));
-  local_result = (int *) malloc(local_rows * sizeof(int));
-  
-  // Process 0 initializes the full matrices
+
+  loc_data1 = (int *) malloc(filas_conc * N * sizeof(int));
+  loc_data2 = (int *) malloc(filas_conc * N * sizeof(int));
+  loc_result = (int *) malloc(filas_conc * sizeof(int));
+
   if (rank == 0) {
     data1 = (int *) malloc(M * N * sizeof(int));
     data2 = (int *) malloc(M * N * sizeof(int));
     result = (int *) malloc(M * sizeof(int));
-    
-    /* Initialize Matrices */
+
     for(i=0; i<M; i++) {
       for(j=0; j<N; j++) {
         data1[i*N+j] = fast_rand();
@@ -103,92 +97,81 @@ int main(int argc, char *argv[] ) {
       }
     }
   }
-  
-  // Prepare send counts and displacements for Scatterv
+
   int *sendcounts = NULL;
-  int *displs = NULL;
-  
+  int *despl = NULL;
+
   if (rank == 0) {
     sendcounts = (int *) malloc(size * sizeof(int));
-    displs = (int *) malloc(size * sizeof(int));
-    
+    despl = (int *) malloc(size * sizeof(int));
+
     int offset = 0;
     for(i=0; i<size; i++) {
-      int proc_rows = (i < remainder) ? (rows + 1) : rows;
-      sendcounts[i] = proc_rows * N;
-      displs[i] = offset;
-      offset += proc_rows * N;
+      int filas_func = (i < resto) ? (filas_gen + 1) : filas_gen;
+      sendcounts[i] = filas_func * N;
+      despl[i] = offset;
+      offset += filas_func * N;
     }
   }
-  
-  // Start communication time
+
   comm_start = MPI_Wtime();
-  
-  // Distribute data1 and data2 to all processes
-  MPI_Scatterv(rank == 0 ? data1 : NULL, sendcounts, displs, MPI_INT,
-               local_data1, local_rows * N, MPI_INT,
+
+  MPI_Scatterv(rank == 0 ? data1 : NULL, sendcounts, despl, MPI_INT,
+               loc_data1, filas_conc * N, MPI_INT,
                0, MPI_COMM_WORLD);
-               
-  MPI_Scatterv(rank == 0 ? data2 : NULL, sendcounts, displs, MPI_INT,
-               local_data2, local_rows * N, MPI_INT,
+
+  MPI_Scatterv(rank == 0 ? data2 : NULL, sendcounts, despl, MPI_INT,
+               loc_data2, filas_conc * N, MPI_INT,
                0, MPI_COMM_WORLD);
-  
+
   comm_end = MPI_Wtime();
   comm_time += (comm_end - comm_start);
-  
-  // Start computation time
+
   comp_start = MPI_Wtime();
-  
-  // Each process computes its local portion of the result
-  for(i=0; i<local_rows; i++) {
-    local_result[i] = 0;
+
+  for(i=0; i<filas_conc; i++) {
+    loc_result[i] = 0;
     for(j=0; j<N; j++) {
-      local_result[i] += base_distance(local_data1[i*N+j], local_data2[i*N+j]);
+      loc_result[i] += base_distance(loc_data1[i*N+j], loc_data2[i*N+j]);
     }
   }
-  
+
   comp_end = MPI_Wtime();
   comp_time += (comp_end - comp_start);
-  
-  // Prepare receive counts and displacements for Gatherv
+
   int *recvcounts = NULL;
-  int *recvdispls = NULL;
-  
+  int *recvdespl = NULL;
+
   if (rank == 0) {
     recvcounts = (int *) malloc(size * sizeof(int));
-    recvdispls = (int *) malloc(size * sizeof(int));
-    
+    recvdespl = (int *) malloc(size * sizeof(int));
+
     int offset = 0;
     for(i=0; i<size; i++) {
-      int proc_rows = (i < remainder) ? (rows + 1) : rows;
-      recvcounts[i] = proc_rows;
-      recvdispls[i] = offset;
-      offset += proc_rows;
+      int filas_func = (i < resto) ? (filas_gen + 1) : filas_gen;
+      recvcounts[i] = filas_func;
+      recvdespl[i] = offset;
+      offset += filas_func;
     }
   }
-  
-  // Start communication time for gathering results
+
   comm_start = MPI_Wtime();
-  
-  // Gather results to process 0
-  MPI_Gatherv(local_result, local_rows, MPI_INT,
-              rank == 0 ? result : NULL, recvcounts, recvdispls, MPI_INT,
+
+  MPI_Gatherv(loc_result, filas_conc, MPI_INT,
+              rank == 0 ? result : NULL, recvcounts, recvdespl, MPI_INT,
               0, MPI_COMM_WORLD);
-  
+
   comm_end = MPI_Wtime();
   comm_time += (comm_end - comm_start);
-  
-  // Print times for each process
+
   for(i=0; i<size; i++) {
     if(rank == i) {
       printf("Process %d - Communication time: %lf seconds\n", rank, comm_time);
       printf("Process %d - Computation time: %lf seconds\n", rank, comp_time);
-      fflush(stdout);
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
-  
-  /* Display result (only process 0) */
+
   if (rank == 0) {
     if (DEBUG == 1) {
       int checksum = 0;
@@ -202,19 +185,19 @@ int main(int argc, char *argv[] ) {
       }
       printf("\n");
     }
-    
-    free(data1); 
-    free(data2); 
+
+    free(data1);
+    free(data2);
     free(result);
     free(sendcounts);
-    free(displs);
+    free(despl);
     free(recvcounts);
-    free(recvdispls);
+    free(recvdespl);
   }
-  
-  free(local_data1); 
-  free(local_data2); 
-  free(local_result);
+
+  free(loc_data1);
+  free(loc_data2);
+  free(loc_result);
   
   MPI_Finalize();
 
