@@ -61,7 +61,7 @@ int main(int argc, char *argv[] ) {
   int *loc_result;
 
   int rank, size;
-  int filas_gen;  // Number of filas_gen per process
+  int filas_gen;
   int resto;
   int filas_conc;
 
