@@ -3,7 +3,7 @@
 #include <sys/time.h>
 #include <mpi.h>
 
-#define DEBUG 0
+#define DEBUG 1
 
 /* Translation of the DNA bases
    A -> 0
@@ -173,11 +173,18 @@ int main(int argc, char *argv[] ) {
   }
 
   if (rank == 0) {
+    if (DEBUG == 1) {
       int checksum = 0;
       for(i=0; i<M; i++) {
         checksum += result[i];
       }
       printf("Checksum: %d\n", checksum);
+    } else if (DEBUG == 2) {
+      for(i=0; i<M; i++) {
+        printf(" %d \t ", result[i]);
+      }
+      printf("\n");
+    }
 
     free(data1);
     free(data2);
